@@ -1,0 +1,420 @@
+<script setup lang="ts">
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import AppLayout from '@/layouts/AppLayout.vue';
+import { Head, router, useForm } from '@inertiajs/vue3';
+import type { ColumnDef, ColumnFiltersState, ExpandedState, SortingState, VisibilityState } from '@tanstack/vue-table';
+import {
+    FlexRender,
+    getCoreRowModel,
+    getExpandedRowModel,
+    getFilteredRowModel,
+    getPaginationRowModel,
+    getSortedRowModel,
+    useVueTable,
+} from '@tanstack/vue-table';
+import axios from 'axios';
+import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Plus } from 'lucide-vue-next';
+
+import InputError from '@/components/InputError.vue';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { valueUpdater } from '@/components/ui/table/utils';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
+import { BreadcrumbItem } from '@/types';
+import { h, ref } from 'vue';
+import { toast } from 'vue-sonner';
+import DropdownAction from './DataTableDemoColumn.vue';
+
+export interface Category {
+    id: number;
+    name: string;
+    description: string;
+}
+
+const props = defineProps({
+    items: {
+        type: Object,
+        required: true,
+    },
+});
+
+const columns: ColumnDef<Category>[] = [
+    {
+        id: 'select',
+        header: ({ table }) =>
+            h(Checkbox, {
+                modelValue: table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && 'indeterminate'),
+                'onUpdate:modelValue': (value) => table.toggleAllPageRowsSelected(!!value),
+                ariaLabel: 'Select all',
+            }),
+        cell: ({ row }) =>
+            h(Checkbox, {
+                modelValue: row.getIsSelected(),
+                'onUpdate:modelValue': (value) => row.toggleSelected(!!value),
+                ariaLabel: 'Select row',
+            }),
+        enableSorting: false,
+        enableHiding: false,
+    },
+    {
+        accessorKey: 'name',
+        header: ({ column }) => {
+            return h(
+                Button,
+                {
+                    variant: 'ghost',
+                    onClick: () => column.toggleSorting(column.getIsSorted() === 'asc'),
+                },
+                () => ['Name', h(ArrowUpDown, { class: 'ml-2 h-4 w-4' })],
+            );
+        },
+        cell: ({ row }) => h('div', { class: 'capitalize' }, row.getValue('name')),
+    },
+    {
+        accessorKey: 'description',
+        header: 'Description',
+        cell: ({ row }) => h('div', { class: 'capitalize' }, row.getValue('description')),
+    },
+    {
+        id: 'actions',
+        enableHiding: false,
+        cell: ({ row }) => {
+            const category = row.original;
+
+            return h(
+                'div',
+                { class: 'relative' },
+                h(DropdownAction, {
+                    category,
+                    onEdit: handleEdit,
+                    onDelete: handleDelete,
+                }),
+            );
+        },
+    },
+];
+
+const sorting = ref<SortingState>([]);
+const columnFilters = ref<ColumnFiltersState>([]);
+const columnVisibility = ref<VisibilityState>({});
+const rowSelection = ref({});
+const expanded = ref<ExpandedState>({});
+const pageSizes = [5, 10, 20, 30];
+console.log(props.items);
+const data = ref(props.items.data);
+
+const pagination = ref({
+    pageIndex: props.items.meta.current_page - 1,
+    pageSize: props.items.meta.per_page,
+    pageCount: props.items.meta.last_page,
+    pageSizeOptions: pageSizes,
+    total: props.items.meta.total,
+});
+const table = useVueTable({
+    data,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    onSortingChange: (updaterOrValue) => valueUpdater(updaterOrValue, sorting),
+    onColumnFiltersChange: (updaterOrValue) => valueUpdater(updaterOrValue, columnFilters),
+    onColumnVisibilityChange: (updaterOrValue) => valueUpdater(updaterOrValue, columnVisibility),
+    onRowSelectionChange: (updaterOrValue) => valueUpdater(updaterOrValue, rowSelection),
+    onExpandedChange: (updaterOrValue) => valueUpdater(updaterOrValue, expanded),
+    state: {
+        get sorting() {
+            return sorting.value;
+        },
+        get columnFilters() {
+            return columnFilters.value;
+        },
+        get columnVisibility() {
+            return columnVisibility.value;
+        },
+        get rowSelection() {
+            return rowSelection.value;
+        },
+        get expanded() {
+            return expanded.value;
+        },
+        get pagination() {
+            return pagination.value;
+        },
+    },
+    pageCount: props.items.meta.last_page,
+    rowCount: props.items.meta.total,
+    manualPagination: true,
+    onPaginationChange: (updater) => {
+        const newState = typeof updater === 'function' ? updater(pagination.value) : updater;
+        pagination.value = newState;
+        fetchPage(pagination); // convert to Laravel's 1-based pages
+    },
+});
+
+const breadcrumbs: BreadcrumbItem[] = [
+    {
+        title: 'Categories',
+        href: '/categories',
+    },
+];
+
+const showDialogForm = ref(false);
+const mode = ref('create');
+const categoryId = ref<number | null>(null);
+
+const resetForm = () => {
+    form.reset();
+    errors.value = {};
+    categoryId.value = null;
+};
+
+const openCreateCategoryDialogForm = () => {
+    showDialogForm.value = true;
+    mode.value = 'create';
+};
+
+const form = useForm({
+    name: '',
+    description: '',
+});
+
+const errors = ref({});
+const submit = async () => {
+    try {
+        if (mode.value === 'create') {
+            // Create a new category
+            await axios.post('/categories', form.data());
+            toast.success('Category created successfully.');
+        } else if (mode.value === 'edit') {
+            // Update an existing category
+            await axios.put(`/categories/${categoryId.value}`, form.data());
+            toast.success('Category updated successfully.');
+        }
+
+        resetForm(); // Reset the form after success
+        fetchPage(pagination); // Reload the table (if applicable)
+        showDialogForm.value = false; // Close the dialog
+    } catch (error) {
+        if (error.response && error.response.status === 422) {
+            errors.value = error.response.data.errors; // Assign validation errors
+            toast.error('Validation failed. Please check your input.');
+        } else {
+            toast.error('An unexpected error occurred.');
+        }
+    }
+};
+
+const fetchPage = (newpagination: any) => {
+    router.get(
+        '/categories',
+        { page: newpagination.value.pageIndex + 1, per_page: newpagination.value.pageSize },
+        {
+            preserveState: true,
+            preserveScroll: true,
+
+            onSuccess: (pageData: any) => {
+                data.value = pageData.props.items.data;
+                pagination.value.pageIndex = pageData.props.items.meta.current_page - 1;
+                pagination.value.pageSize = pageData.props.items.meta.per_page; // Update pageSize from backend response
+            },
+        },
+    );
+};
+
+const handleEdit = async (id: number) => {
+    try {
+        // Show the dialog form and set the mode to 'edit'
+
+        mode.value = 'edit';
+        categoryId.value = id;
+        // Make an Axios request to fetch the category data
+        const response = await axios.get(`/categories/${id}`);
+        // Populate the form with the retrieved data
+        form.name = response.data.name;
+        form.description = response.data.description;
+        showDialogForm.value = true;
+    } catch (error) {
+        console.error('Error fetching category:', error);
+        toast.error('Failed to fetch category data.');
+    }
+};
+
+const handleDelete = async (id: number) => {
+    try {
+        // Confirm deletion with the user
+        const confirmed = confirm('Are you sure you want to delete this category?');
+        if (!confirmed) return;
+
+        // Make an Axios DELETE request to delete the category
+        await axios.delete(`/categories/${id}`);
+
+        // Show a success message
+        toast.success('Category deleted successfully.');
+
+        // Reload the table or fetch the updated data
+        fetchPage(pagination);
+    } catch (error) {
+        console.error('Error deleting category:', error);
+        toast.error('Failed to delete category. Please try again.');
+    }
+};
+</script>
+
+<template>
+    <Head title="Categories" />
+    <AppLayout :breadcrumbs="breadcrumbs">
+        <div class="flex h-full flex-1 flex-col gap-4 rounded-xl p-4">
+            <div class="flex items-center gap-2 py-4">
+                <Input
+                    class="max-w-sm"
+                    placeholder="Filter categories..."
+                    :model-value="table.getColumn('name')?.getFilterValue() as string"
+                    @update:model-value="table.getColumn('name')?.setFilterValue($event)"
+                />
+                <div class="ml-auto flex items-center gap-2">
+                    <Button class="bg-sky-300" @click="openCreateCategoryDialogForm"> <Plus class="h-4"></Plus> Create Category</Button>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger as-child>
+                            <Button variant="outline" class="ml-auto"> Columns <ChevronDown class="ml-2 h-4 w-4" /> </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                            <DropdownMenuCheckboxItem
+                                v-for="column in table.getAllColumns().filter((column) => column.getCanHide())"
+                                :key="column.id"
+                                class="capitalize"
+                                :model-value="column.getIsVisible()"
+                                @update:model-value="
+                                    (value) => {
+                                        column.toggleVisibility(!!value);
+                                    }
+                                "
+                            >
+                                {{ column.id }}
+                            </DropdownMenuCheckboxItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                </div>
+            </div>
+            <div class="rounded-md border">
+                <Table>
+                    <TableHeader>
+                        <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
+                            <TableHead
+                                v-for="header in headerGroup.headers"
+                                :key="header.id"
+                                :data-pinned="header.column.getIsPinned()"
+                                :class="
+                                    cn(
+                                        { 'sticky bg-background/95': header.column.getIsPinned() },
+                                        header.column.getIsPinned() === 'left' ? 'left-0' : 'right-0',
+                                    )
+                                "
+                            >
+                                <FlexRender v-if="!header.isPlaceholder" :render="header.column.columnDef.header" :props="header.getContext()" />
+                            </TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        <template v-if="table.getRowModel().rows?.length">
+                            <template v-for="row in table.getRowModel().rows" :key="row.id">
+                                <TableRow :data-state="row.getIsSelected() && 'selected'">
+                                    <TableCell
+                                        v-for="cell in row.getVisibleCells()"
+                                        :key="cell.id"
+                                        :data-pinned="cell.column.getIsPinned()"
+                                        :class="
+                                            cn(
+                                                { 'sticky bg-background/95': cell.column.getIsPinned() },
+                                                cell.column.getIsPinned() === 'left' ? 'left-0' : 'right-0',
+                                            )
+                                        "
+                                    >
+                                        <FlexRender :render="cell.column.columnDef.cell" :props="cell.getContext()" />
+                                    </TableCell>
+                                </TableRow>
+                                <TableRow v-if="row.getIsExpanded()">
+                                    <TableCell :colspan="row.getAllCells().length">
+                                        {{ JSON.stringify(row.original) }}
+                                    </TableCell>
+                                </TableRow>
+                            </template>
+                        </template>
+
+                        <TableRow v-else>
+                            <TableCell :colspan="columns.length" class="h-24 text-center"> No results. </TableCell>
+                        </TableRow>
+                    </TableBody>
+                </Table>
+            </div>
+
+            <div class="flex items-center justify-end space-x-2 py-4">
+                <div class="flex-1 text-sm text-muted-foreground">
+                    {{ table.getFilteredSelectedRowModel().rows.length }} of {{ table.getFilteredRowModel().rows.length }} row(s) selected. Total {{ table.getRowCount() }} entities
+                </div>
+                <div class="flex items-center space-x-2">
+                    <p class="text-sm font-medium">Rows per page</p>
+                    <Select
+                        :model-value="table.getState().pagination.pageSize.toString()"
+                        @update:model-value="(value) => table.setPageSize(Number(value))"
+                    >
+                        <SelectTrigger class="h-8 w-[70px]">
+                            <SelectValue :placeholder="table.getState().pagination.pageSize.toString()" />
+                        </SelectTrigger>
+                        <SelectContent side="top">
+                            <SelectItem v-for="pageSize in pageSizes" :key="pageSize" :value="pageSize.toString()">
+                                {{ pageSize }}
+                            </SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div class="space-x-2">
+                    <Button variant="outline" size="sm" :disabled="!table.getCanPreviousPage()" @click="table.setPageIndex(0)">
+                        <ChevronsLeft />
+                    </Button>
+                    <Button variant="outline" size="sm" :disabled="!table.getCanPreviousPage()" @click="table.previousPage()">
+                        <ChevronLeft />
+                    </Button>
+                    <span class="text-sm">Page {{ pagination.pageIndex + 1 }} of {{ props.items.meta.last_page }}</span>
+                    <Button variant="outline" size="sm" :disabled="!table.getCanNextPage()" @click="table.nextPage()"> <ChevronRight /> </Button>
+                    <Button variant="outline" size="sm" :disabled="!table.getCanNextPage()" @click="table.setPageIndex(table.getPageCount())">
+                        <ChevronsRight />
+                    </Button>
+                </div>
+            </div>
+        </div>
+        <!-- dialog form -->
+        <Dialog v-model:open="showDialogForm">
+            <DialogContent class="sm:max-w-[425px]">
+                <DialogHeader>
+                    <DialogTitle>{{ mode === 'create' ? 'Create' : 'Update' }} Category</DialogTitle>
+                </DialogHeader>
+                <DialogDescription> Use this form to edit the category details. </DialogDescription>
+                <form class="space-y-6" @submit.prevent="submit">
+                    <div class="grid w-full gap-2">
+                        <Label for="name" class="text-right"> Name </Label>
+                        <Input id="name" class="uppercase" v-model="form.name" />
+                        <InputError :message="errors?.name" />
+                    </div>
+                    <div class="grid w-full gap-2">
+                        <Label for="description" class="text-right"> Description </Label>
+                        <Textarea id="description" class="uppercase" v-model="form.description" />
+                        <InputError :message="errors?.description" />
+                    </div>
+                    <DialogFooter>
+                        <Button type="submit" class="bg-green-300">
+                            {{ mode === 'create' ? 'Create' : 'Update' }}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
+    </AppLayout>
+</template>
