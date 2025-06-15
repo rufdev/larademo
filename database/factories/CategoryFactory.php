@@ -16,9 +16,30 @@ class CategoryFactory extends Factory
      */
     public function definition(): array
     {
+        // Define common device categories you'd expect
+        $deviceCategories = [
+            'Laptop',
+            'Desktop PC',
+            'Monitor',
+            'Printer',
+            'Network Switch',
+            'Router',
+            'Server',
+            'Mobile Phone',
+            'Tablet',
+            'Projector',
+            'IP Camera',
+            'Firewall',
+            'UPS (Uninterruptible Power Supply)',
+            'Storage Device',
+            'Software License', 
+            'Peripherals', 
+        ];
+
+
         return [
-            'name' => $this->faker->unique()->word() . ' ' . $this->faker->randomElement(['Device', 'Software', 'Accessory']),
-            'description' => $this->faker->sentence(),
+            'name' => $this->faker->randomElement($deviceCategories),
+            'description' => $this->faker->sentence()
         ];
     }
 }
